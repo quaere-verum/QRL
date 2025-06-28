@@ -1,0 +1,80 @@
+reinforce:
+  policy_hidden_size: 128
+  lr: 0.0003
+  policy_max_std: 1.0
+  policy_min_std: 0.01
+  kwargs:
+    gamma: 0.99
+    max_grad_norm: 1.0
+vmpo:
+  policy_hidden_size: 128
+  critic_hidden_size: 128
+  policy_lr: 0.0003
+  critic_lr: 0.001
+  policy_max_std: 1.0
+  policy_min_std: 0.01
+  kwargs:
+    batch_size: 128
+    update_per_rollout: 10
+    gamma: 0.99
+    max_grad_norm: 1.0
+    gamma: 0.99
+    gae_lambda: 0.95
+    max_grad_norm: 1.0
+ppo:
+  policy_hidden_size: 128
+  critic_hidden_size: 128
+  policy_lr: 0.0003
+  critic_lr: 0.001
+  policy_max_std: 1.0
+  policy_min_std: 0.01
+  kwargs:
+    batch_size: 128
+    update_per_rollout: 10
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_range: 0.2
+    max_grad_norm: 1.0
+ddpg:
+  policy_hidden_size: 128
+  critic_hidden_size: 128
+  policy_lr: 0.0003
+  critic_lr: 0.001
+  initial_exploration_noise: 1.0
+  noise_update_frequency: 1
+  noise_decay_factor: 0.99
+  minimum_exploration_noise: 0.15
+  kwargs:
+    episodes_per_buffer: 100
+    episodes_per_update: 20
+    batches_per_update: 50
+    gamma: 0.99
+    rho_policy: 0.995
+    rho_critic: 0.99
+    batch_size: 128
+    normalise_rewards: false
+    policy_max_gradient_norm: 1.0
+    critic_max_gradient_norm: 10.0
+td3:
+  policy_hidden_size: 128
+  critic_hidden_size: 128
+  policy_lr: 0.0003
+  critic_lr: 0.001
+  initial_exploration_noise: 1.0
+  noise_update_frequency: 1
+  noise_decay_factor: 0.99
+  minimum_exploration_noise: 0.15
+  kwargs:
+    episodes_per_buffer: 100
+    episodes_per_update: 20
+    batches_per_update: 50
+    gamma: 0.99
+    rho_policy: 0.995
+    rho_critic: 0.99
+    batch_size: 128
+    normalise_rewards: false
+    policy_max_gradient_norm: 1.0
+    critic_max_gradient_norm: 10.0
+    policy_smoothing_std: 0.2
+    policy_smoothing_clip_range: 0.5
+    policy_update_delay: 5

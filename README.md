@@ -1,0 +1,2 @@
+# Reinforcement Learning for Stochastic Optimisation
+This repository implements various reinforcement learning algorithms from scratch, using only PyTorch. Rather than considering Markov Decision Processes in their most general form, this repository assumed that the MDP in question has a fixed time horizon, that episodes cannot be terminated prematurely, and that stochastic optimisatiton is being performed over some number of Monte Carlo paths. This allows us to simplify the implementation of various algorithms tremendously.

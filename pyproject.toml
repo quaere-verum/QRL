@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "qrl"
+version = "0.1.0"
+description = ""
+authors = ["quaere-verum <quaereverum2538@gmail.com>"]
+readme = "README.md"
+packages = [
+    {include="qrl", from="src"}
+]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+scipy = "^1.15.3"
+rich = "^14.0.0"
+tqdm = "^4.67.1"
+torch = "^2.7.1"
+matplotlib = "^3.10.3"
+pyyaml = "^6.0.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
