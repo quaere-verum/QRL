@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 from qrl.mdp import LQGMDP
 from qrl.algorithms import get_algorithm
 from qrl.functions import GaussianPolicy
+import seaborn as sns
+sns.set_theme(context="paper", style="whitegrid")
 torch.manual_seed(0)
 rng = np.random.default_rng(0) 
 
@@ -68,22 +70,40 @@ def main():
     cumulative_rewards = rewards.sum(dim=1).numpy()
     benchmark_cumulative_rewards = benchmark_rewards.sum(dim=1).numpy()
 
-    plt.title("Cumulative Rewards Histogram")
-    plt.hist(cumulative_rewards, color="blue", alpha=0.5, label="RL")
-    plt.hist(benchmark_cumulative_rewards, color="orange", alpha=0.5, label="Benchmark")
-    plt.axvline(cumulative_rewards.mean(), c="blue", linestyle="--")
-    plt.axvline(benchmark_cumulative_rewards.mean(), c="orange", linestyle="--")
-    plt.legend()
-    plt.show()
+    plt.figure(figsize=(10, 6))
+    sns.histplot(cumulative_rewards, color="blue", label="RL", kde=False, stat="density", bins=30, alpha=0.6)
+    sns.histplot(benchmark_cumulative_rewards, color="orange", label="Benchmark", kde=False, stat="density", bins=30, alpha=0.6)
 
-    plt.title("Expected Reward Per Timestep")
-    plt.plot(rewards.mean(dim=0).numpy(), label="RL", c="blue")
-    plt.axhline(rewards.mean(dim=0).numpy().mean(), linestyle="--", c="blue")
-    plt.plot(benchmark_rewards.mean(dim=0).numpy(), label="Benchmark", c="orange")
-    plt.axhline(benchmark_rewards.mean(dim=0).numpy().mean(), linestyle="--", c="orange")
-    plt.grid()
-    plt.legend()
-    plt.show()
+    plt.axvline(cumulative_rewards.mean(), color="blue", linestyle="--", label="RL Mean")
+    plt.axvline(benchmark_cumulative_rewards.mean(), color="orange", linestyle="--", label="Benchmark Mean")
+
+    plt.title("Cumulative Rewards Distribution", fontsize=18)
+    plt.xlabel("Cumulative Reward", fontsize=14)
+    plt.ylabel("Density", fontsize=14)
+    plt.legend(fontsize=12)
+    plt.tight_layout()
+    plt.savefig(f"plots/{algorithm_name}_{nr_steps}_hist.png", format="png")
+    plt.close()
+
+    plt.figure(figsize=(10, 6))
+    mean_rl = rewards.mean(dim=0).numpy()
+    mean_benchmark = benchmark_rewards.mean(dim=0).numpy()
+
+    sns.lineplot(x=range(len(mean_rl)), y=mean_rl, label="RL", color="C0", linewidth=2)
+    plt.axhline(mean_rl.mean(), linestyle="--", color="C0", linewidth=1.5, label="RL Mean")
+
+    sns.lineplot(x=range(len(mean_benchmark)), y=mean_benchmark, label="Benchmark", color="C1", linewidth=2)
+    plt.axhline(mean_benchmark.mean(), linestyle="--", color="C1", linewidth=1.5, label="Benchmark Mean")
+
+
+    plt.title("Expected Reward per Timestep", fontsize=18)
+    plt.xlabel("Timestep", fontsize=14)
+    plt.ylabel("Expected Reward", fontsize=14)
+    plt.grid(alpha=0.3)
+    plt.legend(fontsize=12)
+    plt.tight_layout()
+    plt.savefig(f"plots/{algorithm_name}_{nr_steps}_per_time.png", format="png")
+    plt.close()
 
 
 if __name__ == "__main__":
