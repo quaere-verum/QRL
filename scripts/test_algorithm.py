@@ -50,10 +50,11 @@ def make_mdp(nr_paths: int, nr_steps: int) -> LQGMDP:
 
 
 def main():
-    algorithm_name = "TD3"
+    save_fig = True
+    algorithm_name = "VMPO"
     nr_paths = 1000
     nr_steps = 50
-    training_rounds = 250
+    training_rounds = 100
     mdp = make_mdp(nr_paths, nr_steps)
     benchmark_actions, benchmark_rewards = mdp.solve()
 
@@ -82,8 +83,11 @@ def main():
     plt.ylabel("Density", fontsize=14)
     plt.legend(fontsize=12)
     plt.tight_layout()
-    plt.savefig(f"plots/{algorithm_name}_{nr_steps}_hist.png", format="png")
-    plt.close()
+    if not save_fig:
+        plt.show()
+    else:
+        plt.savefig(f"plots/{algorithm_name}_{nr_steps}_{training_rounds}_hist.png", format="png")
+        plt.close()
 
     plt.figure(figsize=(10, 6))
     mean_rl = rewards.mean(dim=0).numpy()
@@ -102,8 +106,11 @@ def main():
     plt.grid(alpha=0.3)
     plt.legend(fontsize=12)
     plt.tight_layout()
-    plt.savefig(f"plots/{algorithm_name}_{nr_steps}_per_time.png", format="png")
-    plt.close()
+    if not save_fig:
+        plt.show()
+    else:
+        plt.savefig(f"plots/{algorithm_name}_{nr_steps}_{training_rounds}_per_time.png", format="png")
+        plt.close()
 
 
 if __name__ == "__main__":

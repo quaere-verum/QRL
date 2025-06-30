@@ -69,8 +69,8 @@ class GaussianPolicy(torch.nn.Module):
         self._deterministic_mode = deterministic
  
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        mean = self.model.forward(x)
-        std = torch.relu(self.std).clamp(self.min_std, self.max_std)
+        mean = torch.clamp(self.model.forward(x), self.action_lb, self.action_ub)
+        std = self.std.clamp(self.min_std, self.max_std)
         return mean, std.broadcast_to(mean.shape)
     
     def get_logprobs(self, state: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:

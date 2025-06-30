@@ -80,68 +80,66 @@ class VMPO:
     
 
     def train(self, n: int) -> None:
-        nr_batches = self.mdp.nr_paths * self.mdp.nr_steps // self.batch_size
         for round in (pbar := tqdm(range(n))):
             states, actions, advantages, scores = self.collect_rollout()
             advantages = (advantages - advantages.mean()) / advantages.std().clamp(min=1e-6, max=None)
             policy_losses, value_losses, entropy_losses = [], [], []
             for update_nr in range(self.update_per_rollout):
-                for batch_nr in range(nr_batches):
-                    path_idx = torch.randint(0, self.mdp.nr_paths, (self.batch_size,))
-                    time_idx = torch.randint(0, self.mdp.nr_steps, (self.batch_size,))
+                path_idx = torch.randint(0, self.mdp.nr_paths, (self.batch_size,))
+                time_idx = torch.randint(0, self.mdp.nr_steps, (self.batch_size,))
 
-                    states_batch = states[path_idx, time_idx]
-                    actions_batch = actions[path_idx, time_idx]
-                    advantages_batch = advantages[path_idx, time_idx]
-                    scores_batch = scores[path_idx, time_idx]
+                states_batch = states[path_idx, time_idx]
+                actions_batch = actions[path_idx, time_idx]
+                advantages_batch = advantages[path_idx, time_idx]
+                scores_batch = scores[path_idx, time_idx]
 
-                    logprobs_new = self.policy.get_logprobs(states_batch, actions_batch)
+                logprobs_new = self.policy.get_logprobs(states_batch, actions_batch)
 
-                    kl_divergence = torch.distributions.kl_divergence(
-                        self._target_policy.get_dist(states_batch),
-                        self.policy.get_dist(states_batch)
-                    )
-                    entropy_loss = (
-                        torch.clamp(self._alpha, 0.0) * (self._eps_alpha - kl_divergence.detach())
-                        + torch.clamp(self._alpha.detach(), 0.0) * kl_divergence
-                    ).mean()
+                kl_divergence = torch.distributions.kl_divergence(
+                    self._target_policy.get_dist(states_batch),
+                    self.policy.get_dist(states_batch)
+                )
+                entropy_loss = (
+                    torch.clamp(self._alpha, 0.0) * (self._eps_alpha - kl_divergence.detach())
+                    + torch.clamp(self._alpha.detach(), 0.0) * kl_divergence
+                ).mean()
 
-                    top_indices = torch.sort(advantages_batch, descending=True).indices[:len(advantages_batch) // 2]
-                    top_advantages = advantages_batch[top_indices]
+                top_indices = torch.sort(advantages_batch, descending=True).indices[:len(advantages_batch) // 2]
+                top_advantages = advantages_batch[top_indices]
 
-                    weights = ((top_advantages - top_advantages.max()) / self._eta.detach()).exp()
-                    weights = weights / weights.sum()
+                weights = ((top_advantages - top_advantages.max()) / self._eta.detach()).exp()
+                weights = weights / weights.sum()
 
-                    policy_loss = -(weights * logprobs_new[top_indices]).sum()
+                policy_loss = -(weights * logprobs_new[top_indices]).sum()
 
-                    temperature_loss = (
-                        self._eta * self._eps_eta
-                        + self._eta * ((advantages_batch - advantages_batch.max()) / self._eta).exp().mean().log()
-                    )
+                temperature_loss = (
+                    self._eta * self._eps_eta
+                    + self._eta * ((advantages_batch - advantages_batch.max()) / self._eta).exp().mean().log()
+                )
 
-                    values = self.value_function.value(states_batch).flatten()
-                    value_loss = torch.nn.functional.mse_loss(scores_batch, values)
+                values = self.value_function.value(states_batch).flatten()
+                value_loss = torch.nn.functional.mse_loss(scores_batch, values)
 
-                    self.policy_optim.zero_grad()
-                    self.value_function_optim.zero_grad()
-                    self._multiplier_optimiser.zero_grad()
-                    
-                    policy_loss.backward()
-                    value_loss.backward()
-                    entropy_loss.backward()
-                    temperature_loss.backward()
-                    
-                    if self.max_grad_norm is not None:
-                        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
-                        torch.nn.utils.clip_grad_norm_(self.value_function.parameters(), self.max_grad_norm)
-                    
-                    self.policy_optim.step()
-                    self.value_function_optim.step()
-                    self._multiplier_optimiser.step()
+                self.policy_optim.zero_grad()
+                self.value_function_optim.zero_grad()
+                self._multiplier_optimiser.zero_grad()
+                
+                policy_loss.backward()
+                value_loss.backward()
+                entropy_loss.backward()
+                temperature_loss.backward()
+                
+                if self.max_grad_norm is not None:
+                    torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+                    torch.nn.utils.clip_grad_norm_(self.value_function.parameters(), self.max_grad_norm)
+                
+                self.policy_optim.step()
+                self.value_function_optim.step()
+                self._multiplier_optimiser.step()
 
-                    policy_losses.append(policy_loss.item())
-                    value_losses.append(value_loss.item())
-                    entropy_losses.append(entropy_loss.item())
+                policy_losses.append(policy_loss.item())
+                value_losses.append(value_loss.item())
+                entropy_losses.append(entropy_loss.item())
 
             self._update_target_policy()
             pbar.set_description(

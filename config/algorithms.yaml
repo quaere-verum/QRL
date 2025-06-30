@@ -15,7 +15,7 @@ vmpo:
   policy_min_std: 0.01
   kwargs:
     batch_size: 128
-    update_per_rollout: 10
+    update_per_rollout: 50
     gamma: 0.99
     max_grad_norm: 1.0
     gamma: 0.99
@@ -30,7 +30,7 @@ ppo:
   policy_min_std: 0.01
   kwargs:
     batch_size: 128
-    update_per_rollout: 10
+    update_per_rollout: 50
     gamma: 0.99
     gae_lambda: 0.95
     clip_range: 0.2
@@ -66,11 +66,11 @@ td3:
   minimum_exploration_noise: 0.15
   kwargs:
     episodes_per_buffer: 100
-    episodes_per_update: 20
-    batches_per_update: 50
+    episodes_per_update: 10
+    batches_per_update: 50 
     gamma: 0.99
-    rho_policy: 0.995
-    rho_critic: 0.99
+    rho_policy: 0.925
+    rho_critic: 0.925
     batch_size: 128
     normalise_rewards: false
     policy_max_gradient_norm: 1.0
