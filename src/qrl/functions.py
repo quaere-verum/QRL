@@ -209,18 +209,20 @@ class ValueFunction(torch.nn.Module):
 class QuantileFunction(torch.nn.Module):
     def __init__(
         self,
-        quantile_locations: torch.Tensor,
+        q_start: float,
+        q_end: float,
+        nr_quantiles: int,
         action_dim: int, 
         state_dim: int, 
         hidden_size: int,
     ):
         super().__init__()
-        assert quantile_locations.min() > 0 and quantile_locations.max() < 1
-        assert quantile_locations.ndim == 1
-        assert torch.all(torch.diff(quantile_locations) > 0)
+        assert 0 <= q_start < q_end <= 1.0, "Quantile locations must be in the range (0, 1)"
+        linspace = torch.linspace(q_start, q_end, nr_quantiles + 1)
+        self.quantile_locations = (linspace[:-1] + linspace[1:]) / 2.0
+        self.probability_mass = linspace.diff()
         self.b = torch.nn.Parameter(torch.tensor([1.0]), requires_grad=False)
-        self.quantile_locations = quantile_locations
-        self._nr_quantiles = quantile_locations.shape[0]
+        self.nr_quantiles = nr_quantiles
         self.action_dim = action_dim
         self.state_dim = state_dim
         self.hidden_size = hidden_size
@@ -229,7 +231,7 @@ class QuantileFunction(torch.nn.Module):
             torch.nn.ReLU(),
             torch.nn.Linear(hidden_size, hidden_size),
             torch.nn.ReLU(),
-            torch.nn.Linear(hidden_size, quantile_locations.shape[0])
+            torch.nn.Linear(hidden_size, nr_quantiles)
         )
 
     def disable_training(self) -> None:

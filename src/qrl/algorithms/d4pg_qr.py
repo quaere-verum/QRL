@@ -53,7 +53,7 @@ def generalised_quantile_huber_loss(
         - (u < 0).float()
     )
  
-    return torch.sum(loss * multiplier) / (batch_size * quantile_function._nr_quantiles)
+    return torch.sum(loss * multiplier) / (batch_size * quantile_function.nr_quantiles)
  
 def quantile_huber_loss(
     quantile_function: QuantileFunction,
@@ -76,7 +76,7 @@ def quantile_huber_loss(
         - (u.detach() < 0).float()
     ) / mse_bound
  
-    return torch.sum(huber_loss * multiplier) / (batch_size * quantile_function._nr_quantiles)
+    return torch.sum(huber_loss * multiplier) / (batch_size * quantile_function.nr_quantiles)
  
 @dataclass
 class D4PG_Base:

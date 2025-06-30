@@ -78,3 +78,30 @@ td3:
     policy_smoothing_std: 0.2
     policy_smoothing_clip_range: 0.5
     policy_update_delay: 5
+d4pg_qr:
+  objective:
+    name: "expected_value"
+  policy_hidden_size: 128
+  critic_hidden_size: 128
+  nr_quantiles: 32
+  q_start: 0.0
+  q_end: 1.0
+  policy_lr: 0.0003
+  critic_lr: 0.001
+  initial_exploration_noise: 1.0
+  noise_update_frequency: 1
+  noise_decay_factor: 0.99
+  minimum_exploration_noise: 0.15
+  huber_loss_mse_bound: 1.0
+  kwargs:
+    episodes_per_buffer: 100
+    episodes_per_update: 10
+    batches_per_update: 50 
+    gamma: 0.99
+    rho_policy: 0.925
+    rho_critic: 0.925
+    batch_size: 128
+    normalise_rewards: false
+    policy_max_gradient_norm: 1.0
+    critic_max_gradient_norm: 10.0
+    policy_update_delay: 5

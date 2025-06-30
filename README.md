@@ -6,6 +6,9 @@ The benchmark is linear quadratic Gaussian control. To simplify things we assume
 $$\mathbb{E}[x_N^T F x_N + \sum_{i=0}^{N-1}(x_i^TQ_ix_i + u_i^T R_i u_i)]$$
 where $x_i$ is the state, $u_i$ is the control (i.e. the agent's action), $F$ is the final state penalty, $Q_i$ is the state penalty, and $R_i$ is the control penalty. The latter two penalty matrices are allowed to be time-dependent. There is an analytic solution to this problem, which we calculate, and then compare to the policy learned by the algorithm. 
 
+### D4PG QR
+![image](plots/D4PG_QR_50_250_hist.png)
+![image](plots/D4PG_QR_50_250_per_time.png)
 ### TD3
 ![image](plots/TD3_50_1000_hist.png)
 ![image](plots/TD3_50_1000_per_time.png)

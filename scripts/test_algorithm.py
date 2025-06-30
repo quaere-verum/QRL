@@ -51,10 +51,10 @@ def make_mdp(nr_paths: int, nr_steps: int) -> LQGMDP:
 
 def main():
     save_fig = True
-    algorithm_name = "VMPO"
+    algorithm_name = "D4PG_QR"
     nr_paths = 1000
     nr_steps = 50
-    training_rounds = 100
+    training_rounds = 250
     mdp = make_mdp(nr_paths, nr_steps)
     benchmark_actions, benchmark_rewards = mdp.solve()
 
