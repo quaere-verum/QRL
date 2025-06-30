@@ -51,7 +51,7 @@ def make_mdp(nr_paths: int, nr_steps: int) -> LQGMDP:
 
 def main():
     save_fig = True
-    algorithm_name = "D4PG_QR"
+    algorithm_name = "D4PG_GQR"
     nr_paths = 1000
     nr_steps = 50
     training_rounds = 250

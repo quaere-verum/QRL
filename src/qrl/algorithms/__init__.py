@@ -7,7 +7,7 @@ __all__ = [
     "TD3",
     "VMPO"
 ]
-from .d4pg_qr import D4PG_QR
+from .d4pg_qr import D4PG_QR, D4PG_GQR
 from .ddpg import DDPG
 from .md4pg import MD4PG
 from .ppo import PPO
@@ -45,6 +45,7 @@ def get_algorithm(algorithm_name: str, mdp: MDP) -> Algorithm:
     assert name in [
         "md4pg",
         "d4pg_qr",
+        "d4pg_gqr",
         "ddpg",
         "ppo",
         "reinforce",
@@ -174,14 +175,11 @@ def get_algorithm(algorithm_name: str, mdp: MDP) -> Algorithm:
                 **config[name]["kwargs"]
             )
         elif name == "d4pg_qr":
-            if config[name]["objective"]["name"] == "expected_value":
-                def objective_function(
-                    quantiles: Tensor,
-                    quantile_function: QuantileFunction,
-                ) -> Tensor:
-                    return (quantiles * quantile_function.probability_mass[None, :]).sum(dim=1)
-            else:
-                raise ValueError(f"Unknown objective specified: {config[name]["objective"]["name"]}")
+            def objective_function(
+                quantiles: Tensor,
+                quantile_function: QuantileFunction,
+            ) -> Tensor:
+                return (quantiles * quantile_function.probability_mass[None, :]).sum(dim=1)
                 
             policy = DeterministicPolicy(
                 action_dim=mdp.action_dim,
@@ -212,6 +210,45 @@ def get_algorithm(algorithm_name: str, mdp: MDP) -> Algorithm:
                     minimum_value=tensor([config[name]["minimum_exploration_noise"]])
                 ),
                 mse_bound=config[name]["huber_loss_mse_bound"],
+                **config[name]["kwargs"]
+            )
+        elif name == "d4pg_gqr":
+            def objective_function(
+                quantiles: Tensor,
+                quantile_function: QuantileFunction,
+            ) -> Tensor:
+                return (quantiles * quantile_function.probability_mass[None, :]).sum(dim=1)
+                
+            policy = DeterministicPolicy(
+                action_dim=mdp.action_dim,
+                state_dim=mdp.state_dim,
+                hidden_size=config[name]["policy_hidden_size"],
+                action_lb=mdp.action_lb,
+                action_ub=mdp.action_ub
+            )
+            critic = QuantileFunction(
+                q_start=config[name]["q_start"],
+                q_end=config[name]["q_end"],
+                nr_quantiles=config[name]["nr_quantiles"],
+                action_dim=mdp.action_dim,
+                state_dim=mdp.state_dim,
+                hidden_size=config[name]["critic_hidden_size"]
+            )
+            return D4PG_GQR(
+                mdp=mdp,
+                objective_function=objective_function,
+                policy=policy,
+                quantile_function=critic,
+                policy_optimiser=Adam(policy.parameters(), lr=config[name]["policy_lr"]),
+                quantile_function_optimiser=Adam(critic.parameters(), lr=config[name]["critic_lr"]),
+                exploration_noise=GaussianNoiseScale(
+                    initial_value=tensor([config[name]["initial_exploration_noise"]]),
+                    update_frequency=config[name]["noise_update_frequency"],
+                    decay_factor=config[name]["noise_decay_factor"],
+                    minimum_value=tensor([config[name]["minimum_exploration_noise"]])
+                ),
+                mse_bound_decay=config[name]["huber_loss_mse_bound_decay"],
+                loss_type="AGQR" if config[name]["use_approximate_loss"] else "GQR",
                 **config[name]["kwargs"]
             )
         elif name == "md4pg":
