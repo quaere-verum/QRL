@@ -18,3 +18,6 @@ where $x_i$ is the state, $u_i$ is the control (i.e. the agent's action), $F$ is
 ### VMPO
 ![image](plots/VMPO_50_100_hist.png)
 ![image](plots/VMPO_50_100_per_time.png)
+### D4PG GQR (uses Generalised Quantile Huber Loss)
+![image](plots/D4PG_GQR_50_250_hist.png)
+![image](plots/D4PG_GQR_50_250_per_time.png)
