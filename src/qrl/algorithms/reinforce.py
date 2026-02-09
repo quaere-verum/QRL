@@ -24,12 +24,10 @@ class REINFORCE:
         return scores
 
     def train(self, n: int):
-        mean_final_scores = []
         for round in (pbar := tqdm(range(n))):
             logprobs, scores = self.collect_rollout()
-            mean_final_scores.append(scores[:self.mdp.nr_paths].mean().item())
             if self.score_threshold is not None:
-                if mean_final_scores[-1] >= self.score_threshold:
+                if scores[:, 0].mean().item() >= self.score_threshold:
                     break
             weighted_logprobs = logprobs * scores
             loss = -torch.mean(weighted_logprobs)
@@ -38,7 +36,7 @@ class REINFORCE:
             if self.max_grad_norm is not None:
                 torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
             self.optimiser.step()
-            pbar.set_description(f"P: {loss.item():.4f}")
+            pbar.set_description(f"P: {loss.item():+4.4f}", refresh=False)
 
 
     def collect_rollout(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -51,8 +49,6 @@ class REINFORCE:
             logprobs[:, t] = logprob.flatten()
             state, reward = self.mdp.step(action)
             rewards[:, t] = reward
-        scores = self.compute_scores(rewards).flatten()
-        logprobs = logprobs.flatten()
+        scores = self.compute_scores(rewards)
+        logprobs = logprobs
         return logprobs, scores
-
-        

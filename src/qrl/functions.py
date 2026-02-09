@@ -73,11 +73,14 @@ class GaussianPolicy(torch.nn.Module):
         std = self.std.clamp(self.min_std, self.max_std)
         return mean, std.broadcast_to(mean.shape)
     
-    def get_logprobs(self, state: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+    def get_logprobs(self, state: torch.Tensor, actions: torch.Tensor, *, return_entropy: bool = False) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         mean, std = self.forward(state)
         dist = torch.distributions.Normal(mean, std)
-        logprobs = dist.log_prob(actions)
-        return torch.sum(logprobs, dim=-1)
+        logprobs = torch.sum(dist.log_prob(actions), dim=-1)
+        if return_entropy:
+            entropy = dist.entropy()
+            return logprobs, entropy
+        return logprobs
     
     def get_dist(self, state: torch.Tensor) -> torch.distributions.Normal:
         mean, std = self.forward(state)
@@ -159,7 +162,7 @@ class DeterministicPolicy(torch.nn.Module):
             torch.nn.ReLU(),
             torch.nn.Linear(hidden_size, hidden_size),
             torch.nn.ReLU(),
-            torch.nn.Linear(hidden_size, action_dim)
+            torch.nn.Linear(hidden_size, action_dim),
         )
 
     def disable_training(self) -> None:
@@ -188,7 +191,7 @@ class ValueFunction(torch.nn.Module):
             torch.nn.ReLU(),
             torch.nn.Linear(hidden_size, hidden_size),
             torch.nn.ReLU(),
-            torch.nn.Linear(hidden_size, 1)
+            torch.nn.Linear(hidden_size, 1),
         )
 
     def disable_training(self) -> None:

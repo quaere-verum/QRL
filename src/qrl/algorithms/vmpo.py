@@ -15,44 +15,51 @@ class VMPO:
     batch_size: int
     update_per_rollout: int
     gamma: float = 0.99
-    gae_lambda: float = 0.95
+    gae_lambda: float | None = None
     max_grad_norm: float | None = 1.0
 
     def __post_init__(self):
         self._eps_alpha = 0.1
         self._eps_eta = 0.01
-        self._eta = torch.nn.Parameter(torch.tensor([0.05]), requires_grad=True)
-        self._alpha = torch.nn.Parameter(torch.tensor([0.1]), requires_grad=True)
+        self._eta_logit = torch.nn.Parameter(torch.tensor([0.05]), requires_grad=True)
+        self._alpha_logit = torch.nn.Parameter(torch.tensor([0.1]), requires_grad=True)
 
         self._multiplier_optimiser = torch.optim.Adam(
-            [{"params": [self._eta, self._alpha]}], lr=0.01
+            [{"params": [self._eta_logit, self._alpha_logit]}], lr=0.02
         )
         self._target_policy = cp.deepcopy(self.policy)
         self._target_policy.disable_training()
 
     def _update_target_policy(self):
-        target_params = list(self._target_policy.parameters())
-        new_params = list(self.policy.parameters())
-        for target_p, new_p in zip(target_params, new_params):
+        for target_p, new_p in zip(self._target_policy.parameters(), self.policy.parameters()):
             target_p.data.copy_(new_p.data)
 
-    def compute_gae(self, rewards: torch.Tensor, state_values: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        advantages = torch.zeros_like(rewards)    
-        gae = 0
-        for t in reversed(range(self.mdp.nr_steps)):
-            if t == self.mdp.nr_steps - 1:
-                next_value = 0
-                next_done = True
-            else:
-                next_value = state_values[:, t + 1]
-                next_done = False
-            
-            delta = rewards[:, t] + self.gamma * next_value * (1 - next_done) - state_values[:, t]
-            
-            gae = delta + self.gamma * self.gae_lambda * (1 - next_done) * gae
-            advantages[:, t] = gae
-            
-        scores = advantages + state_values
+    def compute_advantages_scores(self, rewards: torch.Tensor, state_values: torch.Tensor) -> torch.Tensor:
+        if self.gae_lambda is None:
+            scores = torch.zeros_like(rewards)
+            for t in reversed(range(self.mdp.nr_steps)):
+                if t == self.mdp.nr_steps - 1:
+                    scores[:, t] = rewards[:, t]
+                else:
+                    scores[:, t] = rewards[:, t] + self.gamma * scores[:, t + 1]
+            advantages = scores - state_values
+        else:
+            advantages = torch.zeros_like(rewards)    
+            gae = 0
+            for t in reversed(range(self.mdp.nr_steps)):
+                if t == self.mdp.nr_steps - 1:
+                    next_value = 0
+                    next_done = True
+                else:
+                    next_value = state_values[:, t + 1]
+                    next_done = False
+                
+                delta = rewards[:, t] + self.gamma * next_value * (1 - next_done) - state_values[:, t]
+                
+                gae = delta + self.gamma * self.gae_lambda * (1 - next_done) * gae
+                advantages[:, t] = gae
+                
+            scores = advantages + state_values
         return advantages, scores
 
     def collect_rollout(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -70,8 +77,8 @@ class VMPO:
                 states[:, t, :] = state
                 state, reward = self.mdp.step(action)
                 rewards[:, t] = reward
-        rewards = (rewards - rewards.mean()) / rewards.std().clamp(1e-6, None)
-        advantages, scores = self.compute_gae(
+                
+        advantages, scores = self.compute_advantages_scores(
             rewards,
             state_values
         )
@@ -96,25 +103,27 @@ class VMPO:
                 logprobs_new = self.policy.get_logprobs(states_batch, actions_batch)
 
                 kl_divergence = torch.distributions.kl_divergence(
+                    self.policy.get_dist(states_batch),
                     self._target_policy.get_dist(states_batch),
-                    self.policy.get_dist(states_batch)
+                    
                 )
+                alpha = torch.nn.functional.softplus(self._alpha_logit)
+                eta = torch.nn.functional.softplus(self._eta_logit)
                 entropy_loss = (
-                    torch.clamp(self._alpha, 0.0) * (self._eps_alpha - kl_divergence.detach())
-                    + torch.clamp(self._alpha.detach(), 0.0) * kl_divergence
+                    alpha * (self._eps_alpha - kl_divergence.detach())
+                    + alpha.detach() * kl_divergence
                 ).mean()
 
                 top_indices = torch.sort(advantages_batch, descending=True).indices[:len(advantages_batch) // 2]
                 top_advantages = advantages_batch[top_indices]
 
-                weights = ((top_advantages - top_advantages.max()) / self._eta.detach()).exp()
-                weights = weights / weights.sum()
+                weights = torch.nn.functional.softmax((top_advantages - top_advantages.max()) / eta.detach(), dim=0)
 
-                policy_loss = -(weights * logprobs_new[top_indices]).sum()
+                policy_loss = -(weights * logprobs_new[top_indices]).mean()
 
                 temperature_loss = (
-                    self._eta * self._eps_eta
-                    + self._eta * ((advantages_batch - advantages_batch.max()) / self._eta).exp().mean().log()
+                    eta * self._eps_eta
+                    + eta * ((top_advantages - top_advantages.max()) / eta).exp().mean().log()
                 )
 
                 values = self.value_function.value(states_batch).flatten()
@@ -143,6 +152,7 @@ class VMPO:
 
             self._update_target_policy()
             pbar.set_description(
-                f"P: {sum(policy_losses) / len(policy_losses):.4f} C: {sum(value_losses) / len(value_losses):.4f} E: {sum(entropy_losses) / len(entropy_losses):.4f}"
+                f"P: {sum(policy_losses) / len(policy_losses):+4.4f} C: {sum(value_losses) / len(value_losses):+4.4f} E: {sum(entropy_losses) / len(entropy_losses):+4.4f}",
+                refresh=False
             )
         return

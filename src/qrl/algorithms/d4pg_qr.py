@@ -29,13 +29,12 @@ def generalised_quantile_huber_loss(
     batch_size = target.shape[0]
     quantile_estimate = quantile_function.compute_quantiles(state, action)
  
-    std1 = torch.std(target, dim=1)
-    std2 = torch.std(quantile_estimate, dim=1)
-    b_new = torch.abs(std1 - std2).mean()
-    quantile_function.b.data = (1 - mse_bound_decay) * b_new + mse_bound_decay * quantile_function.b
- 
     u = target[:, torch.newaxis, :] - quantile_estimate[:, :, torch.newaxis]
     u_abs = torch.abs(u)
+    with torch.no_grad():
+        b_new = torch.quantile(u_abs.detach(), 0.70)
+        quantile_function.b.mul_(mse_bound_decay).add_((1 - mse_bound_decay) * b_new.detach())
+ 
     if approximate:
         loss = torch.where(
             u_abs < quantile_function.b,
@@ -53,7 +52,7 @@ def generalised_quantile_huber_loss(
         - (u < 0).float()
     )
  
-    return torch.sum(loss * multiplier) / (batch_size * quantile_function.nr_quantiles)
+    return torch.sum(loss * multiplier) / (batch_size * quantile_function.nr_quantiles * quantile_function.nr_quantiles)
  
 def quantile_huber_loss(
     quantile_function: QuantileFunction,
@@ -74,9 +73,8 @@ def quantile_huber_loss(
     multiplier = torch.abs(
         quantile_function.quantile_locations[:, torch.newaxis]
         - (u.detach() < 0).float()
-    ) / mse_bound
- 
-    return torch.sum(huber_loss * multiplier) / (batch_size * quantile_function.nr_quantiles)
+    )
+    return torch.sum(huber_loss * multiplier) / (batch_size * quantile_function.nr_quantiles * quantile_function.nr_quantiles)
  
 @dataclass
 class D4PG_Base:
@@ -95,9 +93,9 @@ class D4PG_Base:
     rho_policy: float
     rho_critic: float
     batch_size: int
-    normalise_rewards: bool
-    policy_max_gradient_norm: float | None
-    critic_max_gradient_norm: float | None
+    normalise_rewards: bool = False
+    policy_max_gradient_norm: float | None = None
+    critic_max_gradient_norm: float | None = None
  
     def __post_init__(self):
         assert 0 < self.rho_policy < 1 and 0 < self.rho_critic < 1
@@ -108,6 +106,9 @@ class D4PG_Base:
  
         self._episode_ptr = 0
         self._nr_filled = 0
+        self._reward_count = 0
+        self._reward_mean = 0.0
+        self._reward_2_mean = 0.0
         self._state_buffer = torch.zeros(
             (self.mdp.nr_paths, self.mdp.nr_steps, self.episodes_per_buffer, self.mdp.state_dim),
             dtype=torch.float32
@@ -139,18 +140,14 @@ class D4PG_Base:
             policy_losses.extend(policy_loss)
             qf_losses.extend(qf_loss)
             self.exploration_noise.update(n)
-            pbar.set_description(f"P: {sum(policy_loss) / len(policy_loss):.4f} C: {sum(qf_loss) / len(qf_loss):.4f}")
+            pbar.set_description(f"P: {sum(policy_loss) / len(policy_loss):+4.4f} C: {sum(qf_loss) / len(qf_loss):+4.4f}", refresh=False)
  
     def _update_target_quantile_function(self):
-        target_params = list(self._target_quantile_function.parameters())
-        new_params = list(self.quantile_function.parameters())
-        for target_p, new_p in zip(target_params, new_params):
+        for target_p, new_p in zip(self._target_quantile_function.parameters(), self.quantile_function.parameters()):
             target_p.data.copy_(target_p.data * self.rho_critic + new_p.data * (1 - self.rho_critic))
            
     def _update_target_policy(self):
-        target_params = list(self._target_policy.parameters())
-        new_params = list(self.policy.parameters())
-        for target_p, new_p in zip(target_params, new_params):
+        for target_p, new_p in zip(self._target_policy.parameters(), self.policy.parameters()):
             target_p.data.copy_(target_p.data * self.rho_policy + new_p.data * (1 - self.rho_policy))
  
     def fill_buffer(self, n_episodes: int) -> None:
@@ -167,6 +164,26 @@ class D4PG_Base:
                     self._action_buffer[:, t, self._episode_ptr, :] = action
                     state, reward = self.mdp.step(action)
                     self._reward_buffer[:, t, self._episode_ptr] = reward
+
+                if self.normalise_rewards:
+                    batch = self._reward_buffer[:, :, self._episode_ptr]
+                    batch_mean = batch.mean()
+                    batch_mean_2 = batch.square().mean()
+                    batch_count = self.mdp.nr_paths * self.mdp.nr_steps
+                    tot = self._reward_count + batch_count
+
+                    new_mean = (
+                        self._reward_count * self._reward_mean 
+                        + batch_count * batch_mean 
+                    ) / tot
+
+                    new_mean_2 = (
+                        self._reward_count * self._reward_2_mean
+                        + batch_count * batch_mean_2
+                    ) / tot
+                    self._reward_mean = new_mean
+                    self._reward_2_mean = new_mean_2
+                    self._reward_count = tot
                 self._nr_filled = min(self._nr_filled + 1, self.episodes_per_buffer)
                 self._episode_ptr = (self._episode_ptr + 1) % self.episodes_per_buffer
  
@@ -180,18 +197,20 @@ class D4PG_Base:
         actions = self._action_buffer[path_idx, time_idx, episode_idx]
         rewards = self._reward_buffer[path_idx, time_idx, episode_idx]
         if self.normalise_rewards:
-            rewards = (rewards - self._reward_buffer[:, :, :self._nr_filled].mean()) / self._reward_buffer[:, :, :self._nr_filled].std().clamp(min=1e-6, max=None)
+            std = (self._reward_2_mean - self._reward_mean ** 2).sqrt().clamp_min(1e-6)
+            rewards = (rewards - self._reward_mean) / std
         terminal = self._is_terminal[path_idx, time_idx, episode_idx].float()
  
-        actions_next = self._target_policy.act(states_next)
- 
-        targets = (
-            rewards[:, torch.newaxis]
-            + self.gamma * (1.0 - terminal[:, torch.newaxis]) * self._target_quantile_function.compute_quantiles(
-                states_next,
-                actions_next
+        with torch.no_grad():
+            actions_next = self._target_policy.act(states_next)
+    
+            targets = (
+                rewards[:, torch.newaxis]
+                + self.gamma * (1.0 - terminal[:, torch.newaxis]) * self._target_quantile_function.compute_quantiles(
+                    states_next,
+                    actions_next
+                )
             )
-        )
  
         return states, actions, targets
  
@@ -201,9 +220,9 @@ class D4PG_Base:
  
 @dataclass
 class D4PG_QR(D4PG_Base):
-    mse_bound: float | None
+    mse_bound: float | None = None
  
-    def update(self, nr_batches: int) -> list[float]:
+    def update(self, nr_batches: int) -> tuple[list[float], list[float]]:
         policy_losses, qf_losses = [], []
         for batch_nr in range(1, nr_batches + 1):
             states, actions, targets = self._get_batch()
@@ -251,8 +270,8 @@ class D4PG_QR(D4PG_Base):
        
 @dataclass
 class D4PG_GQR(D4PG_Base):
-    mse_bound_decay: float | None
-    loss_type: Literal["GQR", "AGQR"]
+    mse_bound_decay: float | None = None
+    loss_type: Literal["GQR", "AGQR"] = "GQR"
  
     def __post_init__(self):
         super().__post_init__()

@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from ..mdp import MDP
 from torch.optim import Adam
 from torch import tensor, linspace, Tensor
+from math import sqrt
 from itertools import chain
 import yaml
 
@@ -134,10 +135,10 @@ def get_algorithm(algorithm_name: str, mdp: MDP) -> Algorithm:
                 policy_optimiser=Adam(policy.parameters(), lr=config[name]["policy_lr"]),
                 value_function_optimiser=Adam(critic.parameters(), lr=config[name]["critic_lr"]),
                 exploration_noise=GaussianNoiseScale(
-                    initial_value=tensor([config[name]["initial_exploration_noise"]]),
+                    initial_value=tensor([config[name]["initial_exploration_noise"]]).repeat(mdp.action_dim) / sqrt(mdp.action_dim),
                     update_frequency=config[name]["noise_update_frequency"],
                     decay_factor=config[name]["noise_decay_factor"],
-                    minimum_value=tensor([config[name]["minimum_exploration_noise"]])
+                    minimum_value=tensor([config[name]["minimum_exploration_noise"]]).repeat(mdp.action_dim) / sqrt(mdp.action_dim)
                 ),
                 **config[name]["kwargs"]
             )
@@ -167,10 +168,10 @@ def get_algorithm(algorithm_name: str, mdp: MDP) -> Algorithm:
                 policy_optimiser=Adam(policy.parameters(), lr=config[name]["policy_lr"]),
                 value_functions_optimiser=Adam(chain(critic1.parameters(), critic2.parameters()), lr=config[name]["critic_lr"]),
                 exploration_noise=GaussianNoiseScale(
-                    initial_value=tensor([config[name]["initial_exploration_noise"]]),
+                    initial_value=tensor([config[name]["initial_exploration_noise"]]).repeat(mdp.action_dim) / sqrt(mdp.action_dim),
                     update_frequency=config[name]["noise_update_frequency"],
                     decay_factor=config[name]["noise_decay_factor"],
-                    minimum_value=tensor([config[name]["minimum_exploration_noise"]])
+                    minimum_value=tensor([config[name]["minimum_exploration_noise"]]).repeat(mdp.action_dim) / sqrt(mdp.action_dim)
                 ),
                 **config[name]["kwargs"]
             )
@@ -204,10 +205,10 @@ def get_algorithm(algorithm_name: str, mdp: MDP) -> Algorithm:
                 policy_optimiser=Adam(policy.parameters(), lr=config[name]["policy_lr"]),
                 quantile_function_optimiser=Adam(critic.parameters(), lr=config[name]["critic_lr"]),
                 exploration_noise=GaussianNoiseScale(
-                    initial_value=tensor([config[name]["initial_exploration_noise"]]),
+                    initial_value=tensor([config[name]["initial_exploration_noise"]]).repeat(mdp.action_dim) / sqrt(mdp.action_dim),
                     update_frequency=config[name]["noise_update_frequency"],
                     decay_factor=config[name]["noise_decay_factor"],
-                    minimum_value=tensor([config[name]["minimum_exploration_noise"]])
+                    minimum_value=tensor([config[name]["minimum_exploration_noise"]]).repeat(mdp.action_dim) / sqrt(mdp.action_dim)
                 ),
                 mse_bound=config[name]["huber_loss_mse_bound"],
                 **config[name]["kwargs"]

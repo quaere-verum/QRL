@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from dataclasses import dataclass
 import copy as cp
 from ..mdp import MDP
@@ -61,6 +62,9 @@ class MD4PG:
  
         self._episode_ptr = 0
         self._nr_filled = 0
+        self._reward_count = 0
+        self._reward_mean = 0.0
+        self._reward_2_mean = 0.0
         self._state_buffer = torch.zeros(
             (self.mdp.nr_paths, self.mdp.nr_steps, self.episodes_per_buffer, self.mdp.state_dim),
             dtype=torch.float32
@@ -94,23 +98,17 @@ class MD4PG:
             policy_losses.extend(policy_loss)
             critic_losses.extend(critic_loss)
             self.exploration_noise.update(n)
-            pbar.set_description(f"P: {sum(policy_loss) / len(policy_loss):.4f} C: {sum(critic_loss) / len(critic_loss):.4f}")
+            pbar.set_description(f"P: {sum(policy_loss) / len(policy_loss):+4.4f} C: {sum(critic_loss) / len(critic_loss):+4.4f}", refresh=False)
  
     def _update_target_critic(self):
-        target_params = list(self._target_first_moment_function.parameters())
-        new_params = list(self.first_moment_function.parameters())
-        for target_p, new_p in zip(target_params, new_params):
+        for target_p, new_p in zip(self._target_first_moment_function.parameters(), self.first_moment_function.parameters()):
             target_p.data.copy_(target_p.data * self.rho_critic + new_p.data * (1 - self.rho_critic))
 
-        target_params = list(self._target_second_moment_function.parameters())
-        new_params = list(self.second_moment_function.parameters())
-        for target_p, new_p in zip(target_params, new_params):
+        for target_p, new_p in zip(self._target_second_moment_function.parameters(), self.second_moment_function.parameters()):
             target_p.data.copy_(target_p.data * self.rho_critic + new_p.data * (1 - self.rho_critic))
            
     def _update_target_policy(self):
-        target_params = list(self._target_policy.parameters())
-        new_params = list(self.policy.parameters())
-        for target_p, new_p in zip(target_params, new_params):
+        for target_p, new_p in zip(self._target_policy.parameters(), self.policy.parameters()):
             target_p.data.copy_(target_p.data * self.rho_policy + new_p.data * (1 - self.rho_policy))
  
     def fill_buffer(self, n_episodes: int) -> None:
@@ -127,6 +125,26 @@ class MD4PG:
                     self._action_buffer[:, t, self._episode_ptr, :] = action
                     state, reward = self.mdp.step(action)
                     self._reward_buffer[:, t, self._episode_ptr] = reward
+                if self.normalise_rewards:
+                    batch = self._reward_buffer[:, :, self._episode_ptr]
+                    batch_mean = batch.mean()
+                    batch_mean_2 = batch.square().mean()
+                    batch_count = self.mdp.nr_paths * self.mdp.nr_steps
+                    tot = self._reward_count + batch_count
+
+                    new_mean = (
+                        self._reward_count * self._reward_mean 
+                        + batch_count * batch_mean 
+                    ) / tot
+
+                    new_mean_2 = (
+                        self._reward_count * self._reward_2_mean
+                        + batch_count * batch_mean_2
+                    ) / tot
+
+                    self._reward_mean = new_mean
+                    self._reward_2_mean = new_mean_2
+                    self._reward_count = tot
                 self._nr_filled = min(self._nr_filled + 1, self.episodes_per_buffer)
                 self._episode_ptr = (self._episode_ptr + 1) % self.episodes_per_buffer
  
@@ -140,31 +158,32 @@ class MD4PG:
         actions = self._action_buffer[path_idx, time_idx, episode_idx]
         rewards = self._reward_buffer[path_idx, time_idx, episode_idx]
         if self.normalise_rewards:
-            rewards = (rewards - self._reward_buffer[:, :, :self._nr_filled].mean()) / self._reward_buffer[:, :, :self._nr_filled].std().clamp(min=1e-6, max=None)
+            std = (self._reward_2_mean - self._reward_mean ** 2).sqrt().clamp_min(1e-6)
+            rewards = (rewards - self._reward_mean) / std
         terminal = self._is_terminal[path_idx, time_idx, episode_idx].float()
  
-        actions_next = self._target_policy.act(states_next)
- 
-        first_moment_targets = (
-            rewards[:, torch.newaxis]
-            + self.gamma * (1.0 - terminal[:, torch.newaxis]) * self._target_first_moment_function.value(
-                states_next,
-                actions_next
-            )
-        )
-        second_moment_targets = (
-            rewards[:, torch.newaxis] ** 2
-            + self.gamma ** 2 * (1.0 - terminal[:, torch.newaxis]) * (
-                self._target_second_moment_function.value(
-                    states_next,
-                    actions_next
-                )
-                + 2 * self.gamma * rewards[:, torch.newaxis] * self._target_first_moment_function.value(
+        with torch.no_grad():
+            actions_next = self._target_policy.act(states_next)
+            first_moment_targets = (
+                rewards[:, torch.newaxis]
+                + self.gamma * (1.0 - terminal[:, torch.newaxis]) * self._target_first_moment_function.value(
                     states_next,
                     actions_next
                 )
             )
-        )
+            second_moment_targets = (
+                rewards[:, torch.newaxis] ** 2
+                + self.gamma ** 2 * (1.0 - terminal[:, torch.newaxis]) * (
+                    self._target_second_moment_function.value(
+                        states_next,
+                        actions_next
+                    )
+                    + 2 * self.gamma * rewards[:, torch.newaxis] * self._target_first_moment_function.value(
+                        states_next,
+                        actions_next
+                    )
+                )
+            )
  
         return states, actions, first_moment_targets, second_moment_targets
  
@@ -174,9 +193,9 @@ class MD4PG:
             states, actions, first_moment_targets, second_moment_targets = self._get_batch()
  
             first_moment_estimates = self.first_moment_function.value(states, actions)
-            first_moment_function_loss = torch.mean(torch.pow(first_moment_estimates - first_moment_targets, 2))
+            first_moment_function_loss = F.smooth_l1_loss(first_moment_estimates, first_moment_targets)
             second_moment_estimates = self.second_moment_function.value(states, actions)
-            second_moment_function_loss = torch.mean(torch.pow(second_moment_estimates - second_moment_targets, 2))
+            second_moment_function_loss = F.smooth_l1_loss(second_moment_estimates, second_moment_targets)
             critic_loss = first_moment_function_loss + second_moment_function_loss
             self.critic_optimiser.zero_grad()
             critic_loss.backward()
