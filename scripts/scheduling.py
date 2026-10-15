@@ -14,15 +14,20 @@ the expectation under a uniformly random order is 9.375.
 
 import torch
 
-from qrl.algorithms import get_algorithm
+from qrl.algorithms import get_algorithm, Policy
 from qrl.mdp import SchedulingMDP
+import argparse
 
 
-N_PATHS = 128
-N_TEST_PATHS = 128
-N_ROUNDS = 250
-SEED = 42
-
+def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--n-paths", type=int, default=128)
+    parser.add_argument("--n-test-paths", type=int, default=128)
+    parser.add_argument("--n-rounds", type=int, default=100)
+    parser.add_argument("--seed", type=int, default=123)
+    parser.add_argument("--algorithm", type=str, default="ppo")
+    return parser.parse_args(argv)
+    
 
 def make_mdp(n_paths: int, seed: int) -> SchedulingMDP:
     rng = torch.Generator().manual_seed(seed)
@@ -41,7 +46,7 @@ def make_mdp(n_paths: int, seed: int) -> SchedulingMDP:
     )
 
 
-def evaluate(mdp: SchedulingMDP, policy) -> float:
+def evaluate(mdp: SchedulingMDP, policy: Policy) -> float:
     policy.deterministic(True)
     try:
         with torch.no_grad():
@@ -54,14 +59,15 @@ def evaluate(mdp: SchedulingMDP, policy) -> float:
         policy.deterministic(False)
 
 
-def main() -> None:
-    torch.manual_seed(SEED)
+def main(argv: list[str] | None = None) -> None:
+    args = parse_arguments(argv)
+    torch.manual_seed(args.seed)
 
-    train_mdp = make_mdp(N_PATHS, seed=SEED)
-    test_mdp = make_mdp(N_TEST_PATHS, seed=SEED + 1)
+    train_mdp = make_mdp(args.n_paths, seed=args.seed)
+    test_mdp = make_mdp(args.n_test_paths, seed=args.seed + 1)
 
     algorithm = get_algorithm(
-        "ppo",
+        args.algorithm,
         train_mdp,
         policy_type="categorical",
         mask_from_state=True,
@@ -76,7 +82,7 @@ def main() -> None:
     print(f"Random-order expectation: {expected_random:.3f}")
     print(f"Before PPO training:      {before:.3f}")
 
-    algorithm.train(N_ROUNDS)
+    algorithm.train(args.n_rounds)
 
     after = evaluate(test_mdp, algorithm.policy)
     print(f"After PPO training:       {after:.3f}")
