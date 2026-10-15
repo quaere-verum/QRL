@@ -172,7 +172,7 @@ class CategoricalPolicy(StochasticPolicy):
             mask = state[:, -self.n_actions:] > 0.5
             if not mask.any(dim=-1).all():
                 raise ValueError("Every path must have at least one valid action")
-            logits = logits.masked_fill(~mask, -torch.inf)
+            logits = logits.masked_fill(~mask, torch.finfo(logits.dtype).min)
 
         return torch.distributions.Independent(
             torch.distributions.Categorical(logits=logits.unsqueeze(1)), 1

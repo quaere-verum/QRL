@@ -119,7 +119,7 @@ class VMPO:
 
                 weights = torch.nn.functional.softmax((top_advantages - top_advantages.max()) / eta.detach(), dim=0)
 
-                policy_loss = -(weights * logprobs_new[top_indices]).mean()
+                policy_loss = -(weights * logprobs_new[top_indices]).sum()
 
                 temperature_loss = (
                     eta * self._eps_eta
