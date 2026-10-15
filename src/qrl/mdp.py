@@ -272,9 +272,6 @@ class TradeExecutionMDP(MDP):
         self._state = torch.cat([q0, p0, time_remaining], dim=1)
         return self._state
 
-    # -----------------------
-    # Nonlinear building blocks
-    # -----------------------
     def _g_impact(self, u: torch.Tensor) -> torch.Tensor:
         """Impact transform g(u) used in price dynamics."""
         if self.impact_fn == "linear":
@@ -306,7 +303,6 @@ class TradeExecutionMDP(MDP):
         uu = u.squeeze(1)
         if self.temp_cost_fn == "quadratic":
             return gamma_t * (uu ** 2)
-        # convex power: gamma * |u|^{1+delta}
         delta = float(self.temp_power_delta)
         return gamma_t * (torch.abs(uu) ** (1.0 + delta))
 
@@ -325,10 +321,8 @@ class TradeExecutionMDP(MDP):
         lam_t = self._lam_t[self._t]
         gamma_t = self._gamma_t[self._t]
 
-        # cost at current state/action
         stage_cost = lam_t * (q.squeeze(1) ** 2) + self._temp_cost(u, gamma_t)
 
-        # dynamics
         eps = self.noise_paths[:, self._t].unsqueeze(1)  # (nr_paths, 1)
         q_next = q - u
 
@@ -347,9 +341,6 @@ class TradeExecutionMDP(MDP):
         reward = -stage_cost
         return self._state, reward
 
-    # -----------------------
-    # Linear baseline (your existing Riccati) + optional linearised B
-    # -----------------------
     def _B_t_linearised(self, t: int, u_lin: float = 0.0) -> torch.Tensor:
         """
         Effective linearised B_t for dynamics around action u_lin.
@@ -384,8 +375,6 @@ class TradeExecutionMDP(MDP):
             Q = torch.zeros(2, 2, dtype=torch.float32)
             Q[0, 0] = float(self._lam_t[t])
 
-            # NOTE: if you also want a quadratic approximation of the convex temp cost,
-            # you can replace R below by a local curvature term around u_lin.
             R = torch.tensor([[float(self._gamma_t[t])]], dtype=torch.float32)
 
             B = self._B_t_linearised(t, u_lin=u_lin)  # (2,1)
@@ -430,3 +419,250 @@ class TradeExecutionMDP(MDP):
             rewards.append(r)
 
         return torch.stack(actions, dim=1), torch.stack(rewards, dim=1)
+
+
+@dataclass
+class SchedulingMDP(MDP):
+    arrival_times: torch.Tensor       # (B, N), nonnegative and sorted
+    service_times: torch.Tensor       # (B, N, S), actual durations, strictly positive
+    runtime_estimates: torch.Tensor   # (B, N, S), agent-visible estimates
+    n_candidates: int = 8
+    job_features: torch.Tensor | None = None  # (B, N, F), agent-visible
+    history_length: int = 8
+
+    def __post_init__(self):
+        super().__post_init__()
+        assert self.arrival_times.ndim == 2
+        assert self.service_times.ndim == self.runtime_estimates.ndim == 3
+        B, N = self.arrival_times.shape
+        assert B > 0 and N > 0
+        assert self.service_times.shape[:2] == (B, N)
+        assert self.runtime_estimates.shape == self.service_times.shape
+        assert self.n_servers > 0 and self.n_candidates > 0
+        assert self.history_length >= 0
+        assert torch.isfinite(self.arrival_times).all()
+        assert torch.all(self.arrival_times >= 0)
+        assert torch.all(self.arrival_times[:, 1:] >= self.arrival_times[:, :-1])
+        assert torch.isfinite(self.service_times).all() and torch.all(self.service_times > 0)
+        assert torch.isfinite(self.runtime_estimates).all() and torch.all(self.runtime_estimates > 0)
+        assert self.action_lb.shape == self.action_ub.shape == (1,)
+        assert self.action_lb.item() == 0 and self.action_ub.item() == self.n_actions
+
+        if self.job_features is None:
+            self.job_features = self.runtime_estimates.new_zeros((B, N, 0))
+        assert self.job_features.ndim == 3 and self.job_features.shape[:2] == (B, N)
+        assert torch.isfinite(self.job_features).all()
+
+        # Simulator time is float64 even though observations remain float32.
+        self.arrival_times = self.arrival_times.to(dtype=torch.float64)
+        self.service_times = self.service_times.to(dtype=torch.float64)
+        self.runtime_estimates = self.runtime_estimates.to(dtype=torch.float32)
+        self.job_features = self.job_features.to(dtype=torch.float32)
+        assert (self.arrival_times.device == self.service_times.device
+                == self.runtime_estimates.device == self.job_features.device)
+        self.reset()
+
+    @property
+    def nr_paths(self) -> int:
+        return self.arrival_times.shape[0]
+
+    @property
+    def nr_steps(self) -> int:
+        return self.arrival_times.shape[1]
+
+    @property
+    def n_servers(self) -> int:
+        return self.service_times.shape[2]
+
+    @property
+    def n_actions(self) -> int:
+        return self.n_candidates * self.n_servers
+
+    @property
+    def action_dim(self) -> int:
+        return 1
+
+    @property
+    def state_dim(self) -> int:
+        # global(5), candidates(K*(2+S+F)), servers(S*3),
+        # recent completions(H*5), action mask(K*S).
+        return (5 + self.n_candidates * (2 + self.n_servers + self.job_features.shape[2])
+                + 3 * self.n_servers + 5 * self.history_length + self.n_actions)
+
+    def reset(self) -> torch.Tensor:
+        B, N, S = self.nr_paths, self.nr_steps, self.n_servers
+        device = self.arrival_times.device
+        self._t = 0
+        self._time = torch.zeros(B, dtype=torch.float64, device=device)
+        self._assigned = torch.zeros((B, N), dtype=torch.bool, device=device)
+        self._completed_count = torch.zeros(B, dtype=torch.long, device=device)
+        self._completion_times = torch.full((B, N), float('nan'), dtype=torch.float64, device=device)
+        self._running = torch.full((B, S), -1, dtype=torch.long, device=device)
+        self._started = torch.zeros((B, S), dtype=torch.float64, device=device)
+        self._finishes = torch.full((B, S), float('inf'), dtype=torch.float64, device=device)
+        self._history = torch.zeros((B, self.history_length, 4), dtype=torch.float32, device=device)
+        self._history_valid = torch.zeros((B, self.history_length), dtype=torch.bool, device=device)
+        self._advance(drain=False)
+        return self._get_obs()
+
+    def _arrived_count(self) -> torch.Tensor:
+        return torch.searchsorted(
+            self.arrival_times.contiguous(), self._time[:, None].contiguous(), right=True
+        ).squeeze(1)
+
+    def _candidates_and_mask(self) -> tuple[torch.Tensor, torch.Tensor]:
+        B, N, S = self.nr_paths, self.nr_steps, self.n_servers
+        ids = torch.arange(N, device=self._time.device).expand(B, N)
+        arrived = ids < self._arrived_count()[:, None]
+        eligible = arrived & ~self._assigned
+        pool = torch.where(eligible, ids, N)
+        k = min(self.n_candidates, N)
+        candidates = pool.topk(k, dim=1, largest=False, sorted=True).values
+        if k < self.n_candidates:
+            pad = torch.full((B, self.n_candidates - k), N, dtype=torch.long,
+                             device=self._time.device)
+            candidates = torch.cat((candidates, pad), dim=1)
+        valid = candidates < N
+        idle = self._running < 0
+        mask = (valid[:, :, None] & idle[:, None, :]).reshape(B, self.n_actions)
+        return candidates, mask
+
+    def _record_finished(self, due: torch.Tensor) -> None:
+        B, S = due.shape
+        batch_ids = torch.arange(B, device=self._time.device)
+        for s in range(S):  # loop over servers, never over Monte Carlo paths
+            rows = batch_ids[due[:, s]]
+            if rows.numel() == 0:
+                continue
+            jobs = self._running[rows, s]
+            self._completion_times[rows, jobs] = self._time[rows]
+            if self.history_length:
+                self._history[rows, 1:] = self._history[rows, :-1].clone()
+                self._history_valid[rows, 1:] = self._history_valid[rows, :-1].clone()
+                self._history[rows, 0, 0] = self.runtime_estimates[rows, jobs, s]
+                self._history[rows, 0, 1] = self.service_times[rows, jobs, s].float()
+                self._history[rows, 0, 2] = s / max(S - 1, 1)
+                self._history[rows, 0, 3] = self._time[rows].float()
+                self._history_valid[rows, 0] = True
+        self._completed_count += due.sum(dim=1)
+        self._running[due] = -1
+        self._finishes[due] = float('inf')
+
+    def _advance(self, *, drain: bool) -> torch.Tensor:
+        """Advance each path to its next decision, or drain after last dispatch.
+
+        Returns integrated unfinished-job count on each path (float64).
+        """
+        B, N = self.nr_paths, self.nr_steps
+        device = self._time.device
+        cost = torch.zeros(B, dtype=torch.float64, device=device)
+        inf = torch.full((B,), float('inf'), dtype=torch.float64, device=device)
+        batch_ids = torch.arange(B, device=device)
+
+        # At most N arrivals and N completions exist on each path.
+        for _ in range(2 * N + 1):
+            arrived = self._arrived_count()
+            if drain:
+                need = (self._running >= 0).any(dim=1)
+            else:
+                waiting = (arrived - self._assigned.sum(dim=1)) > 0
+                need = ~(waiting & (self._running < 0).any(dim=1))
+            if not need.any():
+                return cost
+
+            next_arrival = torch.where(
+                arrived < N,
+                self.arrival_times[batch_ids, arrived.clamp(max=N - 1)],
+                inf,
+            )
+            if drain:
+                next_arrival = inf
+            next_completion = self._finishes.min(dim=1).values
+            next_time = torch.minimum(next_arrival, next_completion)
+            if not torch.isfinite(next_time[need]).all():
+                raise RuntimeError('Scheduling deadlock: no future observable events')
+            next_time = torch.where(need, next_time, self._time)
+            dt = next_time - self._time
+            if torch.any(dt < 0):
+                raise RuntimeError('Event time went backwards')
+            cost += (arrived - self._completed_count).to(torch.float64) * dt
+            self._time = next_time
+            due = (self._running >= 0) & (self._finishes <= self._time[:, None])
+            if due.any():
+                self._record_finished(due)
+
+        raise RuntimeError('Exceeded maximum event count')
+
+    def _get_obs(self) -> torch.Tensor:
+        B, N, S, K = self.nr_paths, self.nr_steps, self.n_servers, self.n_candidates
+        candidates, mask = self._candidates_and_mask()
+        valid = candidates < N
+        ids = candidates.clamp(max=N - 1)
+        rows = torch.arange(B, device=self._time.device)[:, None]
+
+        ages = torch.where(valid, (self._time[:, None] - self.arrival_times[rows, ids]).float(), 0.)
+        estimates = self.runtime_estimates[rows, ids] * valid[:, :, None]
+        features = self.job_features[rows, ids] * valid[:, :, None]
+        candidate_obs = torch.cat((valid.float()[:, :, None], ages[:, :, None],
+                                   estimates, features), dim=-1).reshape(B, -1)
+
+        running = self._running >= 0
+        running_ids = self._running.clamp(min=0)
+        server_ids = torch.arange(S, device=self._time.device)[None, :]
+        running_estimates = self.runtime_estimates[rows, running_ids, server_ids]
+        server_obs = torch.stack((
+            (~running).float(),
+            torch.where(running, (self._time[:, None] - self._started).float(), 0.),
+            torch.where(running, running_estimates, 0.),
+        ), dim=-1).reshape(B, -1)
+
+        history = self._history.clone()
+        if self.history_length:
+            history[:, :, 3] = torch.where(
+                self._history_valid,
+                self._time[:, None].float() - history[:, :, 3],
+                0.,
+            )
+        history_obs = torch.cat((self._history_valid.float()[:, :, None], history),
+                                dim=-1).reshape(B, -1)
+
+        arrived = self._arrived_count()
+        global_obs = torch.stack((
+            self._time.float(),
+            torch.full((B,), self._t / N, device=self._time.device),
+            arrived.float() / N,
+            self._completed_count.float() / N,
+            (arrived - self._assigned.sum(dim=1)).float() / N,
+        ), dim=1)
+        return torch.cat((global_obs, candidate_obs, server_obs, history_obs,
+                          mask.float()), dim=1)
+
+    def step(self, action: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if self._t >= self.nr_steps:
+            raise ValueError('Episode finished; call reset()')
+        if action.shape != (self.nr_paths, 1) or action.dtype not in (torch.int32, torch.int64):
+            raise ValueError('Discrete actions must have integer shape (nr_paths, 1)')
+        if torch.any((action < self.action_lb) | (action >= self.action_ub)):
+            raise ValueError('Action outside [0, n_actions)')
+
+        candidates, mask = self._candidates_and_mask()
+        selection = action[:, 0].long()
+        batch_ids = torch.arange(self.nr_paths, device=self._time.device)
+        if not mask[batch_ids, selection].all():
+            raise ValueError('Illegal assignment: absent job or busy server')
+
+        slots = torch.div(selection, self.n_servers, rounding_mode='floor')
+        servers = selection % self.n_servers
+        jobs = candidates[batch_ids, slots]
+        self._assigned[batch_ids, jobs] = True
+        self._running[batch_ids, servers] = jobs
+        self._started[batch_ids, servers] = self._time
+        self._finishes[batch_ids, servers] = self._time + self.service_times[batch_ids, jobs, servers]
+        self._t += 1
+        holding_cost = self._advance(drain=(self._t == self.nr_steps))
+        return self._get_obs(), (-holding_cost / self.nr_steps).float()
+
+    def mean_sojourn(self) -> torch.Tensor:
+        if self._t != self.nr_steps or not (self._completed_count == self.nr_steps).all():
+            raise ValueError('The episode has not completed')
+        return (self._completion_times - self.arrival_times).mean(dim=1)

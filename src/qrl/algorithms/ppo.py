@@ -1,13 +1,13 @@
 import torch
 from dataclasses import dataclass
 from ..mdp import MDP
-from ..functions import GaussianPolicy, StateValueFunction
+from ..functions import StochasticPolicy, StateValueFunction
 from tqdm import tqdm
 
 @dataclass 
 class PPO:
     mdp: MDP
-    policy: GaussianPolicy
+    policy: StochasticPolicy
     value_function: StateValueFunction
     policy_optim: torch.optim.Optimizer
     value_function_optim: torch.optim.Optimizer
@@ -52,7 +52,7 @@ class PPO:
         rewards = torch.zeros((self.mdp.nr_paths, self.mdp.nr_steps), dtype=torch.float32)
         states = torch.zeros((self.mdp.nr_paths, self.mdp.nr_steps, self.mdp.state_dim), dtype=torch.float32)
         state_values = torch.zeros((self.mdp.nr_paths, self.mdp.nr_steps), dtype=torch.float32)
-        actions = torch.zeros((self.mdp.nr_paths, self.mdp.nr_steps, self.mdp.action_dim), dtype=torch.float32)
+        actions = torch.zeros((self.mdp.nr_paths, self.mdp.nr_steps, self.mdp.action_dim), dtype=self.policy.action_dtype)
 
         state = self.mdp.reset()
         with torch.no_grad():

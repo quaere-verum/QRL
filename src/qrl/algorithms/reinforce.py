@@ -1,13 +1,13 @@
 import torch
 from dataclasses import dataclass
 from ..mdp import MDP
-from ..functions import GaussianPolicy
+from ..functions import StochasticPolicy
 from tqdm import tqdm
 
 @dataclass
 class REINFORCE:
     mdp: MDP
-    policy: GaussianPolicy
+    policy: StochasticPolicy
     optimiser: torch.optim.Optimizer
     gamma: float
     score_threshold: float | None = None

@@ -1,23 +1,25 @@
-[tool.poetry]
+[project]
 name = "qrl"
 version = "0.1.0"
 description = ""
-authors = ["quaere-verum <quaereverum2538@gmail.com>"]
 readme = "README.md"
-packages = [
-    {include="qrl", from="src"}
+authors = [
+    { name = "quaere-verum", email = "quaereverum2538@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "scipy>=1.15.3",
+    "rich>=14.0.0",
+    "tqdm>=4.67.1",
+    "torch>=2.7.1",
+    "matplotlib>=3.10.3",
+    "pyyaml>=6.0.2",
+    "seaborn>=0.13.2",
 ]
 
-[tool.poetry.dependencies]
-python = "^3.12"
-scipy = "^1.15.3"
-rich = "^14.0.0"
-tqdm = "^4.67.1"
-torch = "^2.7.1"
-matplotlib = "^3.10.3"
-pyyaml = "^6.0.2"
-seaborn = "^0.13.2"
-
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["uv_build>=0.8.0,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/qrl"]
