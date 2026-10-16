@@ -4,6 +4,8 @@ from ..mdp import MDP
 from ..functions import StochasticPolicy, StateValueFunction
 from tqdm import tqdm
 import copy as cp
+from typing import Literal
+
 
 @dataclass 
 class VMPO:
@@ -17,8 +19,14 @@ class VMPO:
     gamma: float = 0.99
     gae_lambda: float | None = None
     max_grad_norm: float | None = 1.0
-
+    sampling_mode: Literal["shuffle", "replacement"] = "replacement"
+        
+    
     def __post_init__(self):
+        if self.sampling_mode not in ["shuffle", "replacement"]:
+            raise ValueError(f"Unknown sampling_mode: {self.sampling_mode}. Must be 'shuffle' or 'replacement'.")
+        if self.sampling_mode == "shuffle" and self.batch_size > self.mdp.nr_paths * self.mdp.nr_steps:
+                raise ValueError("Batch size exceeds rollout size.")
         self._eps_alpha = 0.1
         self._eps_eta = 0.01
         self._eta_logit = torch.nn.Parameter(torch.tensor([0.05]), requires_grad=True)
@@ -84,17 +92,37 @@ class VMPO:
         )
 
         return states, actions, advantages, scores
-    
+
+    def _minibatches(self):
+        if self.sampling_mode == "replacement":
+            for _ in range(self.update_per_rollout):
+                yield (
+                    torch.randint(self.mdp.nr_paths, (self.batch_size,)),
+                    torch.randint(self.mdp.nr_steps, (self.batch_size,)),
+                )
+            return
+        elif self.sampling_mode == "shuffle":
+            order = torch.randperm(self.mdp.nr_paths * self.mdp.nr_steps)
+            ptr = 0
+
+            for _ in range(self.update_per_rollout):
+                if ptr == self.mdp.nr_paths * self.mdp.nr_steps:
+                    order = torch.randperm(self.mdp.nr_paths * self.mdp.nr_steps)
+                    ptr = 0
+
+                indices = order[ptr:ptr + self.batch_size]
+                ptr += indices.numel()
+
+                yield indices // self.mdp.nr_steps, indices % self.mdp.nr_steps
+        else:
+            raise ValueError
 
     def train(self, n: int) -> None:
         for round in (pbar := tqdm(range(n))):
             states, actions, advantages, scores = self.collect_rollout()
             advantages = (advantages - advantages.mean()) / advantages.std().clamp(min=1e-6, max=None)
             policy_losses, value_losses, entropy_losses = [], [], []
-            for update_nr in range(self.update_per_rollout):
-                path_idx = torch.randint(0, self.mdp.nr_paths, (self.batch_size,))
-                time_idx = torch.randint(0, self.mdp.nr_steps, (self.batch_size,))
-
+            for path_idx, time_idx in self._minibatches():
                 states_batch = states[path_idx, time_idx]
                 actions_batch = actions[path_idx, time_idx]
                 advantages_batch = advantages[path_idx, time_idx]
