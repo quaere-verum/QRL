@@ -1,0 +1,14 @@
+critic_hidden_size: 128
+critic_lr: 0.001
+kwargs:
+  episodes_per_buffer: 100
+  episodes_per_update: 20
+  batches_per_update: 50
+  gamma: 0.99
+  rho_critic: 0.99
+  batch_size: 128
+  epsilon: 1.0
+  epsilon_decay_factor: 0.99
+  minimum_epsilon: 0.05
+  normalise_rewards: false
+  critic_max_gradient_norm: 10.0

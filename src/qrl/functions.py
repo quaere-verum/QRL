@@ -146,11 +146,6 @@ class CategoricalPolicy(StochasticPolicy):
         mask_from_state: bool = False,
     ):
         super().__init__()
-        if n_actions < 1:
-            raise ValueError("n_actions must be positive")
-        if mask_from_state and state_dim < n_actions:
-            raise ValueError("state_dim must include the action mask")
-
         self.state_dim = state_dim
         self.action_dim = 1  # One integer-valued action per path.
         self.n_actions = n_actions
@@ -170,8 +165,6 @@ class CategoricalPolicy(StochasticPolicy):
         logits: torch.Tensor = self.model.forward(state)
         if self.mask_from_state:
             mask = state[:, -self.n_actions:] > 0.5
-            if not mask.any(dim=-1).all():
-                raise ValueError("Every path must have at least one valid action")
             logits = logits.masked_fill(~mask, torch.finfo(logits.dtype).min)
 
         return torch.distributions.Independent(
@@ -274,6 +267,57 @@ class ValueFunction(torch.nn.Module):
     def value(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         x = torch.concat((state, action), dim=1)
         return self.forward(x)
+
+
+class DiscreteValueFunction(Policy):
+    action_dtype = torch.int64
+
+    def __init__(
+        self,
+        n_actions: int,
+        state_dim: int,
+        hidden_size: int,
+        *,
+        mask_from_state: bool = False,
+    ):
+        super().__init__()
+        self.state_dim = state_dim
+        self.action_dim = 1
+        self.n_actions = n_actions
+        self.hidden_size = hidden_size
+        self.action_lb = torch.tensor([0])
+        self.action_ub = torch.tensor([n_actions])
+        self.mask_from_state = mask_from_state
+        self.model = torch.nn.Sequential(
+            torch.nn.Linear(state_dim, hidden_size),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_size, hidden_size),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_size, n_actions),
+        )
+
+    def disable_training(self) -> None:
+        self.requires_grad_(False)
+
+    def enable_training(self) -> None:
+        self.requires_grad_(True)
+
+    def forward(self, state: torch.Tensor) -> torch.Tensor:
+        return self.model.forward(state)
+
+    def value(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+        return self.forward(state).gather(1, action)
+
+    def act(self, state: torch.Tensor, *, epsilon: float = 0.0) -> torch.Tensor:
+        values = self.forward(state)
+        mask = (state[:, -self.n_actions:] > 0.5 if self.mask_from_state
+                else torch.ones_like(values, dtype=torch.bool))
+        actions = values.masked_fill(~mask, -torch.inf).argmax(dim=1, keepdim=True)
+        if epsilon > 0:
+            random_actions = torch.multinomial(mask.float(), 1)
+            explore = torch.rand_like(actions, dtype=torch.float32) < epsilon
+            actions = torch.where(explore, random_actions, actions)
+        return actions
 
 
 class QuantileFunction(torch.nn.Module):

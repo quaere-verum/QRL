@@ -13,6 +13,7 @@ from torch.optim import Adam
 from ..functions import (
     CategoricalPolicy,
     DeterministicPolicy,
+    DiscreteValueFunction,
     GaussianNoiseScale,
     GaussianPolicy,
     Policy,
@@ -23,6 +24,7 @@ from ..functions import (
 from ..mdp import MDP
 from .d4pg_qr import D4PG_GQR, D4PG_QR
 from .ddpg import DDPG
+from .ddqn import DDQN
 from .md4pg import MD4PG
 from .ppo import PPO
 from .reinforce import REINFORCE
@@ -34,6 +36,7 @@ __all__ = [
     "D4PG_QR", 
     "D4PG_GQR", 
     "DDPG", 
+    "DDQN",
     "PPO", 
     "REINFORCE",
     "TD3", 
@@ -49,16 +52,20 @@ class Algorithm(Protocol):
     def train(self, rounds: int) -> None: ...
 
 
+def _discrete_action_count(mdp: MDP) -> int:
+    upper = mdp.action_ub.item() if mdp.action_ub.numel() == 1 else None
+    if (mdp.action_dim != 1 or mdp.action_lb.numel() != 1
+            or mdp.action_lb.item() != 0 or upper is None
+            or upper < 1 or upper != int(upper)):
+        raise ValueError("Categorical actions require bounds [0], [N] and action_dim=1")
+    return int(upper)
+
+
 def _stochastic_policy(mdp: MDP, config: dict, policy_type: str, masked: bool):
     common = dict(state_dim=mdp.state_dim, hidden_size=config["policy_hidden_size"])
     if policy_type == "categorical":
-        upper = mdp.action_ub.item() if mdp.action_ub.numel() == 1 else None
-        if (mdp.action_dim != 1 or mdp.action_lb.numel() != 1
-                or mdp.action_lb.item() != 0 or upper is None
-                or upper < 1 or upper != int(upper)):
-            raise ValueError("Categorical actions require bounds [0], [N] and action_dim=1")
         return CategoricalPolicy(
-            **common, n_actions=int(upper), mask_from_state=masked
+            **common, n_actions=_discrete_action_count(mdp), mask_from_state=masked
         )
     if policy_type == "gaussian":
         return GaussianPolicy(
@@ -91,18 +98,22 @@ def get_algorithm(
     algorithm_name: str,
     mdp: MDP,
     *,
-    policy_type: str = "gaussian",
+    policy_type: str | None = None,
     mask_from_state: bool = False,
     **overrides,
 ) -> Algorithm:
     name = algorithm_name.lower()
     if name == "md4pg":
         raise NotImplementedError("MD4PG is not yet available from the factory")
-    if name not in {"reinforce", "ppo", "vmpo", "ddpg", "td3", "d4pg_qr", "d4pg_gqr"}:
+    if name not in {"reinforce", "ppo", "vmpo", "ddpg", "ddqn", "td3", "d4pg_qr", "d4pg_gqr"}:
         raise ValueError(f"Unknown algorithm: {algorithm_name}")
+    if policy_type is None:
+        policy_type = "categorical" if name == "ddqn" else "gaussian"
     if policy_type not in {"gaussian", "categorical"}:
         raise ValueError(f"Unknown policy type: {policy_type}")
-    if name not in {"reinforce", "ppo", "vmpo"} and policy_type != "gaussian":
+    if name == "ddqn" and policy_type != "categorical":
+        raise ValueError("ddqn only supports discrete actions")
+    if name not in {"reinforce", "ppo", "vmpo", "ddqn"} and policy_type != "gaussian":
         raise ValueError(f"{name} only supports continuous actions")
 
     path = files("qrl.config").joinpath(f"{name}.yaml")
@@ -111,6 +122,17 @@ def get_algorithm(
     with path.open("r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
     kwargs = {**config["kwargs"], **overrides}
+
+    if name == "ddqn":
+        critic = DiscreteValueFunction(
+            n_actions=_discrete_action_count(mdp), state_dim=mdp.state_dim,
+            hidden_size=config["critic_hidden_size"], mask_from_state=mask_from_state,
+        )
+        return DDQN(
+            mdp=mdp, value_function=critic,
+            value_function_optimiser=Adam(critic.parameters(), lr=config["critic_lr"]),
+            **kwargs,
+        )
 
     if name in {"reinforce", "ppo", "vmpo"}:
         policy = _stochastic_policy(mdp, config, policy_type, mask_from_state)
