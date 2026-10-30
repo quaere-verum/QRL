@@ -250,7 +250,7 @@ class D4PG_QR(D4PG_Base):
                 policy_actions = self.policy.act(states)
                 policy_loss = -torch.mean(
                     self.objective_function(
-                        self.quantile_function.compute_quantiles(states, policy_actions),
+                        self.quantile_function.compute_quantiles(states, policy_actions).sort(dim=1).values,
                         self.quantile_function
                     )
                 )
@@ -305,7 +305,7 @@ class D4PG_GQR(D4PG_Base):
                 policy_actions = self.policy.act(states)
                 policy_loss = -torch.mean(
                     self.objective_function(
-                        self.quantile_function.compute_quantiles(states, policy_actions),
+                        self.quantile_function.compute_quantiles(states, policy_actions).sort(dim=1).values,
                         self.quantile_function
                     )
                 )
