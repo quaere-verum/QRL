@@ -66,7 +66,7 @@ class MD4PG:
         self._reward_mean = 0.0
         self._reward_2_mean = 0.0
         self._state_buffer = torch.zeros(
-            (self.mdp.nr_paths, self.mdp.nr_steps, self.episodes_per_buffer, self.mdp.state_dim),
+            (self.mdp.nr_paths, self.mdp.nr_steps + 1, self.episodes_per_buffer, self.mdp.state_dim),
             dtype=torch.float32
         )
         self._action_buffer = torch.zeros(
@@ -125,6 +125,7 @@ class MD4PG:
                     self._action_buffer[:, t, self._episode_ptr, :] = action
                     state, reward = self.mdp.step(action)
                     self._reward_buffer[:, t, self._episode_ptr] = reward
+                self._state_buffer[:, self.mdp.nr_steps, self._episode_ptr, :] = state
                 if self.normalise_rewards:
                     batch = self._reward_buffer[:, :, self._episode_ptr]
                     batch_mean = batch.mean()
@@ -154,7 +155,7 @@ class MD4PG:
         episode_idx = torch.randint(0, self._nr_filled, (self.batch_size,))
  
         states = self._state_buffer[path_idx, time_idx, episode_idx]
-        states_next = self._state_buffer[path_idx, (time_idx + 1) % self.mdp.nr_steps, episode_idx]
+        states_next = self._state_buffer[path_idx, time_idx + 1, episode_idx]
         actions = self._action_buffer[path_idx, time_idx, episode_idx]
         rewards = self._reward_buffer[path_idx, time_idx, episode_idx]
         if self.normalise_rewards:

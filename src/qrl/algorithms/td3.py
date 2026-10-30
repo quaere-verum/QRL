@@ -41,7 +41,7 @@ class TD3:
         self._reward_mean = 0.0
         self._reward_2_mean = 0.0
         self._state_buffer = torch.zeros(
-            (self.mdp.nr_paths, self.mdp.nr_steps, self.episodes_per_buffer, self.mdp.state_dim), 
+            (self.mdp.nr_paths, self.mdp.nr_steps + 1, self.episodes_per_buffer, self.mdp.state_dim),
             dtype=torch.float32
         )
         self._action_buffer = torch.zeros(
@@ -101,6 +101,7 @@ class TD3:
                     self._action_buffer[:, t, self._episode_ptr, :] = action
                     state, reward = self.mdp.step(action)
                     self._reward_buffer[:, t, self._episode_ptr] = reward
+                self._state_buffer[:, self.mdp.nr_steps, self._episode_ptr, :] = state
                 
                 if self.normalise_rewards:
                     batch = self._reward_buffer[:, :, self._episode_ptr]
@@ -129,11 +130,11 @@ class TD3:
 
     def _get_batch(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         path_idx = torch.randint(0, self.mdp.nr_paths, (self.batch_size,))
-        time_idx = torch.randint(0, self.mdp.nr_steps - 1, (self.batch_size,)) # Exclude terminal state because it doesn't need to be bootstrapped
+        time_idx = torch.randint(0, self.mdp.nr_steps, (self.batch_size,))
         episode_idx = torch.randint(0, self._nr_filled, (self.batch_size,))
 
         states = self._state_buffer[path_idx, time_idx, episode_idx]
-        states_next = self._state_buffer[path_idx, (time_idx + 1) % self.mdp.nr_steps, episode_idx]
+        states_next = self._state_buffer[path_idx, time_idx + 1, episode_idx]
         actions = self._action_buffer[path_idx, time_idx, episode_idx]
         rewards = self._reward_buffer[path_idx, time_idx, episode_idx]
         if self.normalise_rewards:

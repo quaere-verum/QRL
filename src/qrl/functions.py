@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 import torch
+from .distributions import SquashedGaussian
 
 @dataclass
 class GaussianNoiseScale:
@@ -26,13 +27,6 @@ class GaussianNoiseScale:
 
 
 class Policy(torch.nn.Module, ABC):
-    __slots__ = [
-        "state_dim",
-        "action_dim",
-        "hidden_size",
-        "action_lb",
-        "action_ub",
-    ]
     action_dtype = torch.float32
 
     @abstractmethod
@@ -60,13 +54,18 @@ class StochasticPolicy(Policy, ABC):
         state: torch.Tensor,
         *,
         return_logprobs: bool = False,
+        return_latents: bool = False,
     ):
         dist = self.get_dist(state)
         action = dist.mode if self._deterministic_mode else dist.sample()
         action = self._postprocess_action(action)
 
         if return_logprobs:
+            if return_latents:
+                return action, dist.log_prob(action), None
             return action, dist.log_prob(action)
+        if return_latents:
+            return action, None
         return action
 
     def get_logprobs(
@@ -75,6 +74,7 @@ class StochasticPolicy(Policy, ABC):
         actions: torch.Tensor,
         *,
         return_entropy: bool = False,
+        latents: torch.Tensor | None = None,
     ):
         dist = self.get_dist(state)
         logprobs = dist.log_prob(actions)
@@ -120,18 +120,36 @@ class GaussianPolicy(StochasticPolicy):
         self.max_std = max_std
 
     def forward(self, state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        mean = self.model(state).clamp(self.action_lb, self.action_ub)
+        mean = self.model(state)
         std = self.std.clamp(self.min_std, self.max_std)
         return mean, std.expand_as(mean)
 
     def get_dist(self, state: torch.Tensor) -> torch.distributions.Distribution:
         mean, std = self.forward(state)
+        if not (torch.isneginf(self.action_lb).all() and torch.isposinf(self.action_ub).all()):
+            return SquashedGaussian(mean, std, self.action_lb, self.action_ub)
         return torch.distributions.Independent(
             torch.distributions.Normal(mean, std), 1
         )
 
-    def _postprocess_action(self, action: torch.Tensor) -> torch.Tensor:
-        return action.clamp(self.action_lb, self.action_ub)
+    def act(self, state: torch.Tensor, *, return_logprobs=False, return_latents=False):
+        dist = self.get_dist(state)
+        if not isinstance(dist, SquashedGaussian):
+            return super().act(state, return_logprobs=return_logprobs, return_latents=return_latents)
+        latent = dist.base_dist.mode if self._deterministic_mode else dist.base_dist.sample()
+        action = dist.squash(latent)
+        if return_logprobs:
+            logprob = dist.log_prob(action, latents=latent.detach())
+            return (action, logprob, latent.detach()) if return_latents else (action, logprob)
+        return (action, latent.detach()) if return_latents else action
+
+    def get_logprobs(self, state, actions, *, return_entropy=False, latents=None):
+        dist = self.get_dist(state)
+        if isinstance(dist, SquashedGaussian):
+            logprobs = dist.log_prob(actions, latents=latents)
+        else:
+            logprobs = dist.log_prob(actions)
+        return (logprobs, dist.entropy()) if return_entropy else logprobs
 
 
 class CategoricalPolicy(StochasticPolicy):

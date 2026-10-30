@@ -70,17 +70,22 @@ class VMPO:
             scores = advantages + state_values
         return advantages, scores
 
-    def collect_rollout(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def collect_rollout(self, *, return_latents: bool = False):
         rewards = torch.zeros((self.mdp.nr_paths, self.mdp.nr_steps), dtype=torch.float32)
         states = torch.zeros((self.mdp.nr_paths, self.mdp.nr_steps, self.mdp.state_dim), dtype=torch.float32)
         state_values = torch.zeros((self.mdp.nr_paths, self.mdp.nr_steps), dtype=torch.float32)
         actions = torch.zeros((self.mdp.nr_paths, self.mdp.nr_steps, self.mdp.action_dim), dtype=self.policy.action_dtype)
+        latents = None
 
         state = self.mdp.reset()
         with torch.no_grad():
             for t in range(self.mdp.nr_steps):
                 state_values[:, t] = self.value_function.value(state).flatten()
-                action = self._target_policy.act(state)
+                action, latent = self._target_policy.act(state, return_latents=True)
+                if latent is not None:
+                    if latents is None:
+                        latents = torch.empty_like(actions)
+                    latents[:, t] = latent
                 actions[:, t, :] = action
                 states[:, t, :] = state
                 state, reward = self.mdp.step(action)
@@ -91,7 +96,8 @@ class VMPO:
             state_values
         )
 
-        return states, actions, advantages, scores
+        result = (states, actions, advantages, scores)
+        return (*result, latents) if return_latents else result
 
     def _minibatches(self):
         if self.sampling_mode == "replacement":
@@ -119,7 +125,7 @@ class VMPO:
 
     def train(self, n: int) -> None:
         for round in (pbar := tqdm(range(n))):
-            states, actions, advantages, scores = self.collect_rollout()
+            states, actions, advantages, scores, latents = self.collect_rollout(return_latents=True)
             advantages = (advantages - advantages.mean()) / advantages.std().clamp(min=1e-6, max=None)
             policy_losses, value_losses, entropy_losses = [], [], []
             for path_idx, time_idx in self._minibatches():
@@ -128,7 +134,10 @@ class VMPO:
                 advantages_batch = advantages[path_idx, time_idx]
                 scores_batch = scores[path_idx, time_idx]
 
-                logprobs_new = self.policy.get_logprobs(states_batch, actions_batch)
+                logprobs_new = self.policy.get_logprobs(
+                    states_batch, actions_batch,
+                    latents=None if latents is None else latents[path_idx, time_idx],
+                )
 
                 kl_divergence = torch.distributions.kl_divergence(
                     self.policy.get_dist(states_batch),

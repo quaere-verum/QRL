@@ -56,18 +56,23 @@ class PPO:
             scores = advantages + state_values
         return advantages, scores
 
-    def collect_rollout(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def collect_rollout(self, *, return_latents: bool = False):
         logprobs = torch.zeros((self.mdp.nr_paths, self.mdp.nr_steps), dtype=torch.float32)
         rewards = torch.zeros((self.mdp.nr_paths, self.mdp.nr_steps), dtype=torch.float32)
         states = torch.zeros((self.mdp.nr_paths, self.mdp.nr_steps, self.mdp.state_dim), dtype=torch.float32)
         state_values = torch.zeros((self.mdp.nr_paths, self.mdp.nr_steps), dtype=torch.float32)
         actions = torch.zeros((self.mdp.nr_paths, self.mdp.nr_steps, self.mdp.action_dim), dtype=self.policy.action_dtype)
+        latents = None
 
         state = self.mdp.reset()
         with torch.no_grad():
             for t in range(self.mdp.nr_steps):
                 state_values[:, t] = self.value_function.value(state).flatten()
-                action, logprob = self.policy.act(state, return_logprobs=True)
+                action, logprob, latent = self.policy.act(state, return_logprobs=True, return_latents=True)
+                if latent is not None:
+                    if latents is None:
+                        latents = torch.empty_like(actions)
+                    latents[:, t] = latent
                 actions[:, t, :] = action
                 logprobs[:, t] = logprob.flatten()
                 states[:, t, :] = state
@@ -76,7 +81,8 @@ class PPO:
         
         advantages, scores = self.compute_advantages_scores(rewards, state_values)
 
-        return states, actions, advantages, scores, logprobs
+        result = (states, actions, advantages, scores, logprobs)
+        return (*result, latents) if return_latents else result
 
     
     def _minibatches(self):
@@ -105,7 +111,7 @@ class PPO:
 
     def train(self, n: int) -> list[float]:
         for round in (pbar := tqdm(range(n))):
-            states, actions, advantages, scores, logprobs = self.collect_rollout()
+            states, actions, advantages, scores, logprobs, latents = self.collect_rollout(return_latents=True)
             advantages = (advantages - advantages.mean()) / advantages.std().clamp(min=1e-6, max=None)
             
             policy_losses, value_losses = [], []
@@ -117,7 +123,10 @@ class PPO:
                 scores_batch = scores[path_idx, time_idx]
                 logprobs_batch = logprobs[path_idx, time_idx]
 
-                logprobs_new, entropy_new = self.policy.get_logprobs(states_batch, actions_batch, return_entropy=True)
+                logprobs_new, entropy_new = self.policy.get_logprobs(
+                    states_batch, actions_batch, return_entropy=True,
+                    latents=None if latents is None else latents[path_idx, time_idx],
+                )
                 logprobs_new = logprobs_new.flatten()
                 ratio = torch.exp((logprobs_new - logprobs_batch).clamp(-20.0, 20.0))
                 policy_loss_1 = advantages_batch * ratio

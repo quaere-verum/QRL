@@ -97,7 +97,7 @@ class DDQN:
         episode_idx = torch.randint(0, self._nr_filled, (self.batch_size,))
 
         states = self._state_buffer[path_idx, time_idx, episode_idx]
-        states_next = self._state_buffer[path_idx, (time_idx + 1) % self.mdp.nr_steps, episode_idx]
+        states_next = self._state_buffer[path_idx, time_idx + 1, episode_idx]
         actions = self._action_buffer[path_idx, time_idx, episode_idx]
         rewards = self._reward_buffer[path_idx, time_idx, episode_idx]
         if self.normalise_rewards:

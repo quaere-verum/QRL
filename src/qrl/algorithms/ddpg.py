@@ -36,7 +36,7 @@ class DDPG:
         self._reward_mean = 0.0
         self._reward_2_mean = 0.0
         self._state_buffer = torch.zeros(
-            (self.mdp.nr_paths, self.mdp.nr_steps, self.episodes_per_buffer, self.mdp.state_dim), 
+            (self.mdp.nr_paths, self.mdp.nr_steps + 1, self.episodes_per_buffer, self.mdp.state_dim),
             dtype=torch.float32
         )
         self._action_buffer = torch.zeros(
@@ -94,6 +94,8 @@ class DDPG:
                         reward = (reward - reward.mean()) / reward.std().clamp(1e-6, None)
                     self._reward_buffer[:, t, self._episode_ptr] = reward
 
+                self._state_buffer[:, self.mdp.nr_steps, self._episode_ptr, :] = state
+
                 if self.normalise_rewards:
                     batch = self._reward_buffer[:, :, self._episode_ptr]
                     batch_mean = batch.mean()
@@ -119,11 +121,11 @@ class DDPG:
 
     def _get_batch(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         path_idx = torch.randint(0, self.mdp.nr_paths, (self.batch_size,))
-        time_idx = torch.randint(0, self.mdp.nr_steps - 1, (self.batch_size,))
+        time_idx = torch.randint(0, self.mdp.nr_steps, (self.batch_size,))
         episode_idx = torch.randint(0, self._nr_filled, (self.batch_size,))
 
         states = self._state_buffer[path_idx, time_idx, episode_idx]
-        states_next = self._state_buffer[path_idx, (time_idx + 1) % self.mdp.nr_steps, episode_idx]
+        states_next = self._state_buffer[path_idx, time_idx + 1, episode_idx]
         actions = self._action_buffer[path_idx, time_idx, episode_idx]
         rewards = self._reward_buffer[path_idx, time_idx, episode_idx]
         if self.normalise_rewards:
